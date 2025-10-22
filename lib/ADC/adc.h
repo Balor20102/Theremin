@@ -3,8 +3,7 @@
 
 #include <stdint.h>
 
-void adc_init_freerun(void);
-uint8_t adc_get_last(void); // 8-bit top
-extern volatile uint8_t adc_value;
+void ADC_Init(void);
+uint8_t ADC_GetValue(void);
 
 #endif
