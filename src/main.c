@@ -2,12 +2,12 @@
  * main.c - Theremin Project (bare metal)
  * ---------------------------------------
  * Hardware:
- *   - Ultrasonic sensor: TRIG D9 (PB1), ECHO D8 (PB0, ICP1)
- *   - Buzzer: D3 (PD3 / OC2B)
- *   - Filter buttons: D4 (PD4), D5 (PD5)
- *   - Potmeter: A0 (ADC0)
- *   - LCD: via PCF8574 (I2C -> A4=SDA, A5=SCL, address 0x27)
- *   - 7-segment display: via tweede PCF8574 (address 0x20)
+ *   - Ultrasonic: TRIG D9 (PB1), ECHO D8 (PB0)
+ *   - Buzzer:     D3 (PD3 / OC2B)
+ *   - Buttons:    D4 (down), D5 (up)
+ *   - Potmeter:   A0 (ADC0)
+ *   - LCD:        PCF8574 @ 0x27
+ *   - 7-segment:  PCF8574 @ 0x21 en 0x39 (0 = segment aan)
  */
 
 #include <avr/io.h>
@@ -23,24 +23,30 @@
 #include "filter.h"
 #include "adc.h"
 
+// ---------- CONSTANTEN ----------
 #define LCD_ADDR 0x27
-#define SEG_ADDR 0x20
-#define MAX_DISTANCE_CM 65
+#define SEG_ADDR1 0x21
+#define SEG_ADDR2 0x39
+#define MAX_DIST_CM 65
 #define FREQ_MIN 230
 #define FREQ_MAX 1400
+#define FILTER_MIN 1
+#define FILTER_MAX 15
+#define BTN_DOWN PD4
+#define BTN_UP PD5
 
-// ---------- Prototypes ----------
-void Seg7_DisplayNumber(uint8_t number);
+// ---------- PROTOTYPES ----------
+void Seg7_DisplayHex(uint8_t number);
 void FilterButtons_Init(void);
 void FilterButtons_Check(void);
 
-// ---------- Globale variabelen ----------
+// ---------- GLOBAAL ----------
 volatile uint8_t filterSize = 5;
 
-// ---------- Hoofdprogramma ----------
+// ==============================================================
 int main(void)
 {
-    // Init alle hardwaremodules
+    // --- Init hardware ---
     USART_Init();
     Ultrasonic_Init();
     Buzzer_Init();
@@ -57,60 +63,55 @@ int main(void)
     FilterButtons_Init();
     sei();
 
-    _delay_ms(1000);
+    _delay_ms(800);
     HD44780_PCF8574_DisplayClear(LCD_ADDR);
 
     while (1)
     {
-        // ---- 1. Ultrasone meting ----
+        // --- 1. Ultrasone meting ---
         Ultrasonic_Trigger();
-        _delay_ms(60);
+        _delay_ms(50);
 
         if (Ultrasonic_IsReady())
         {
             uint16_t distance = Ultrasonic_GetDistance();
             Filter_AddValue(distance);
             uint16_t filtered = Filter_GetMedian();
+            if (filtered > MAX_DIST_CM)
+                filtered = MAX_DIST_CM;
 
-            if (filtered > MAX_DISTANCE_CM)
-            {
-                filtered = MAX_DISTANCE_CM;
-            }
-
-            // ---- 2. Frequentie berekenen ----
-            uint16_t freq = FREQ_MAX - ((filtered * (FREQ_MAX - FREQ_MIN)) / MAX_DISTANCE_CM);
+            // --- 2. Frequentie ---
+            uint16_t freq = FREQ_MAX - ((filtered * (FREQ_MAX - FREQ_MIN)) / MAX_DIST_CM);
             Buzzer_SetFrequency(freq);
 
-            // ---- 3. Volume uitlezen ----
+            // --- 3. Volume ---
             uint8_t volume = ADC_GetValue();
             OCR2B = volume;
 
-            // ---- 4. LCD bijwerken ----
+            // --- 4. LCD ---
+            char line1[17];
+            char line2[17];
+            snprintf(line1, sizeof(line1), "Dist:%3ucm", filtered);
+            snprintf(line2, sizeof(line2), "Freq:%4uHz", freq);
+
             HD44780_PCF8574_DisplayClear(LCD_ADDR);
             HD44780_PCF8574_PositionXY(LCD_ADDR, 0, 0);
-
-            char line1[16];
-            sprintf(line1, "Dist:%3ucm", filtered);
             HD44780_PCF8574_DrawString(LCD_ADDR, line1);
-
             HD44780_PCF8574_PositionXY(LCD_ADDR, 0, 1);
-            char line2[16];
-            sprintf(line2, "Freq:%4uHz", freq);
             HD44780_PCF8574_DrawString(LCD_ADDR, line2);
 
-            // ---- 5. 7-seg display filtergrootte ----
-            Seg7_DisplayNumber(Filter_GetSize());
+            // --- 5. 7-seg: filtergrootte ---
+            Seg7_DisplayHex(Filter_GetSize());
 
-            // ---- 6. Debug over USART ----
-            char debug[64];
-            sprintf(debug, "Dist=%ucm  Freq=%uHz  Vol=%u  Filter=%u\r\n",
-                    filtered, freq, volume, Filter_GetSize());
-            for (char *p = debug; *p; p++)
-            {
+            // --- 6. USART debug ---
+            char msg[64];
+            snprintf(msg, sizeof(msg),
+                     "Dist=%ucm  Freq=%uHz  Vol=%u  Filter=%u\r\n",
+                     filtered, freq, volume, Filter_GetSize());
+            for (char *p = msg; *p; p++)
                 USART_Transmit(*p);
-            }
 
-            // ---- 7. Knoppen controleren ----
+            // --- 7. Knoppen ---
             FilterButtons_Check();
         }
 
@@ -119,71 +120,85 @@ int main(void)
     return 0;
 }
 
-// ---------- Functie: Filterknoppen ----------
+// ==============================================================
 void FilterButtons_Init(void)
 {
-    DDRD &= ~((1 << PD4) | (1 << PD5)); // ingangen
-    PORTD |= (1 << PD4) | (1 << PD5);   // interne pull-ups
+    DDRD &= ~((1 << BTN_DOWN) | (1 << BTN_UP)); // ingangen
+    PORTD |= (1 << BTN_DOWN) | (1 << BTN_UP);   // interne pull-ups
 }
 
 void FilterButtons_Check(void)
 {
-    if (!(PIND & (1 << PD5)))
+    // knop omhoog (D5)
+    if (!(PIND & (1 << BTN_UP)))
     {
-        _delay_ms(20); // debounce
-        if (!(PIND & (1 << PD5)))
+        _delay_ms(25);
+        if (!(PIND & (1 << BTN_UP)))
         {
             uint8_t size = Filter_GetSize();
-            if (size < 15)
+            if (size < FILTER_MAX)
             {
                 Filter_SetSize(size + 1);
+                USART_Transmit('U');
             }
-            while (!(PIND & (1 << PD5)))
-                ; // wacht tot losgelaten
+            while (!(PIND & (1 << BTN_UP)))
+                ;
         }
     }
 
-    if (!(PIND & (1 << PD4)))
+    // knop omlaag (D4)
+    if (!(PIND & (1 << BTN_DOWN)))
     {
-        _delay_ms(20);
-        if (!(PIND & (1 << PD4)))
+        _delay_ms(25);
+        if (!(PIND & (1 << BTN_DOWN)))
         {
             uint8_t size = Filter_GetSize();
-            if (size > 1)
+            if (size > FILTER_MIN)
             {
                 Filter_SetSize(size - 1);
+                USART_Transmit('D');
             }
-            while (!(PIND & (1 << PD4)))
+            while (!(PIND & (1 << BTN_DOWN)))
                 ;
         }
     }
 }
 
-// ---------- Functie: 7-segment via PCF8574 ----------
-void Seg7_DisplayNumber(uint8_t number)
+// ==============================================================
+void Seg7_DisplayHex(uint8_t number)
 {
-    static const uint8_t segmap[10] = {
-        0b00111111, // 0
-        0b00000110, // 1
-        0b01011011, // 2
-        0b01001111, // 3
-        0b01100110, // 4
-        0b01101101, // 5
-        0b01111101, // 6
-        0b00000111, // 7
-        0b01111111, // 8
-        0b01101111  // 9
+    static const uint8_t segmap[16] = {
+        0b11000000, // 0
+        0b11111001, // 1
+        0b10100100, // 2
+        0b10110000, // 3
+        0b10011001, // 4
+        0b10010010, // 5
+        0b10000010, // 6
+        0b11111000, // 7
+        0b10000000, // 8
+        0b10010000, // 9
+        0b10001000, // A
+        0b10000011, // b
+        0b10100111, // C
+        0b10100001, // d
+        0b10000110, // E
+        0b10001110  // F
     };
 
-    if (number > 9)
-    {
-        number = 9;
-    }
+    if (number > 15)
+        number = 15;
 
     uint8_t pattern = segmap[number];
 
+    // Stuur naar beide PCF's
     TWI_MT_Start();
-    TWI_Transmit_SLAW(SEG_ADDR);
+    TWI_Transmit_SLAW(SEG_ADDR1);
+    TWI_Transmit_Byte(pattern);
+    TWI_Stop();
+
+    TWI_MT_Start();
+    TWI_Transmit_SLAW(SEG_ADDR2);
     TWI_Transmit_Byte(pattern);
     TWI_Stop();
 }
