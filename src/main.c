@@ -20,25 +20,17 @@
 #include "hd44780pcf8574.h"
 #include "ultrasonic.h"
 #include "buzzer.h"
-<<<<<<< HEAD
-#include "adc.h"
-
-    // --- Configuratieconstanten ---
-    == == ==
-    =
 #include "filter.h"
 #include "adc.h"
 
 #define LCD_ADDR 0x27
 #define SEG_ADDR 0x20
 #define MAX_DISTANCE_CM 65
-        >>>>>>> filters
 #define FREQ_MIN 230
 #define FREQ_MAX 1400
 
-    // ---------- Prototypes ----------
-    void
-    Seg7_DisplayNumber(uint8_t number);
+// ---------- Prototypes ----------
+void Seg7_DisplayNumber(uint8_t number);
 void FilterButtons_Init(void);
 void FilterButtons_Check(void);
 
@@ -48,25 +40,15 @@ volatile uint8_t filterSize = 5;
 // ---------- Hoofdprogramma ----------
 int main(void)
 {
-<<<<<<< HEAD
-    // Initialisaties
+    // Init alle hardwaremodules
     USART_Init();
     Ultrasonic_Init();
     Buzzer_Init();
-    == == == =
-                 // Init alle hardwaremodules
-        USART_Init();
-    Ultrasonic_Init();
-    Buzzer_Init();
     Filter_Init(filterSize);
->>>>>>> filters
     ADC_Init();
     TWI_Init();
 
-<<<<<<< HEAD
-    sei(); // interrupts aanzetten
-    == == == =
-                 HD44780_PCF8574_Init(LCD_ADDR);
+    HD44780_PCF8574_Init(LCD_ADDR);
     HD44780_PCF8574_DisplayOn(LCD_ADDR);
     HD44780_PCF8574_DisplayClear(LCD_ADDR);
     HD44780_PCF8574_PositionXY(LCD_ADDR, 0, 0);
@@ -74,46 +56,56 @@ int main(void)
 
     FilterButtons_Init();
     sei();
->>>>>>> filters
 
     _delay_ms(1000);
     HD44780_PCF8574_DisplayClear(LCD_ADDR);
 
     while (1)
     {
-<<<<<<< HEAD
-        // Trigger een afstandsmeting
-        == == == =
-                     // ---- 1. Ultrasone meting ----
->>>>>>> filters
-            Ultrasonic_Trigger();
+        // ---- 1. Ultrasone meting ----
+        Ultrasonic_Trigger();
         _delay_ms(60);
 
-        // Als de meting klaar is
         if (Ultrasonic_IsReady())
         {
             uint16_t distance = Ultrasonic_GetDistance();
+            Filter_AddValue(distance);
+            uint16_t filtered = Filter_GetMedian();
 
-            // Limiteer afstand
-            if (distance > MAX_DISTANCE_CM)
+            if (filtered > MAX_DISTANCE_CM)
             {
-                distance = MAX_DISTANCE_CM;
+                filtered = MAX_DISTANCE_CM;
             }
 
-            // Bereken frequentie binnen bereik
-            uint16_t frequency = FREQ_MAX - (distance * (FREQ_MAX - FREQ_MIN) / MAX_DISTANCE_CM);
-            Buzzer_SetFrequency(frequency);
+            // ---- 2. Frequentie berekenen ----
+            uint16_t freq = FREQ_MAX - ((filtered * (FREQ_MAX - FREQ_MIN)) / MAX_DISTANCE_CM);
+            Buzzer_SetFrequency(freq);
 
-            // Lees volume (ADC potmeter)
+            // ---- 3. Volume uitlezen ----
             uint8_t volume = ADC_GetValue();
-            OCR2B = volume; // PWM duty-cycle aanpassen voor volume
+            OCR2B = volume;
 
-            // Toon waarden via USART
-            char buffer[64];
-            sprintf(buffer, "Afstand: %ucm | Freq: %uHz | Vol: %u\r\n",
-                    distance, frequency, volume);
+            // ---- 4. LCD bijwerken ----
+            HD44780_PCF8574_DisplayClear(LCD_ADDR);
+            HD44780_PCF8574_PositionXY(LCD_ADDR, 0, 0);
 
-            for (char *p = buffer; *p; p++)
+            char line1[16];
+            sprintf(line1, "Dist:%3ucm", filtered);
+            HD44780_PCF8574_DrawString(LCD_ADDR, line1);
+
+            HD44780_PCF8574_PositionXY(LCD_ADDR, 0, 1);
+            char line2[16];
+            sprintf(line2, "Freq:%4uHz", freq);
+            HD44780_PCF8574_DrawString(LCD_ADDR, line2);
+
+            // ---- 5. 7-seg display filtergrootte ----
+            Seg7_DisplayNumber(Filter_GetSize());
+
+            // ---- 6. Debug over USART ----
+            char debug[64];
+            sprintf(debug, "Dist=%ucm  Freq=%uHz  Vol=%u  Filter=%u\r\n",
+                    filtered, freq, volume, Filter_GetSize());
+            for (char *p = debug; *p; p++)
             {
                 USART_Transmit(*p);
             }
@@ -165,4 +157,33 @@ void FilterButtons_Check(void)
                 ;
         }
     }
+}
+
+// ---------- Functie: 7-segment via PCF8574 ----------
+void Seg7_DisplayNumber(uint8_t number)
+{
+    static const uint8_t segmap[10] = {
+        0b00111111, // 0
+        0b00000110, // 1
+        0b01011011, // 2
+        0b01001111, // 3
+        0b01100110, // 4
+        0b01101101, // 5
+        0b01111101, // 6
+        0b00000111, // 7
+        0b01111111, // 8
+        0b01101111  // 9
+    };
+
+    if (number > 9)
+    {
+        number = 9;
+    }
+
+    uint8_t pattern = segmap[number];
+
+    TWI_MT_Start();
+    TWI_Transmit_SLAW(SEG_ADDR);
+    TWI_Transmit_Byte(pattern);
+    TWI_Stop();
 }
