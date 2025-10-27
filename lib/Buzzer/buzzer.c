@@ -1,62 +1,65 @@
-#include "buzzer.h"
+/*
+ * buzzer.c - eenvoudige en werkende versie
+ * Timer2 in CTC mode -> toggle OC2B (D3)
+ * Toonhoogte instelbaar via OCR2A
+ */
+
 #include <avr/io.h>
-#include <avr/interrupt.h>
-#include <stdbool.h>
+#include "buzzer.h"
 
-#define BUZZER_PIN PD3
+#ifndef F_CPU
+#define F_CPU 16000000UL
+#endif
 
-#define TIMER0_BASE_FREQ 31250UL
-
-volatile bool buzzer_state = false;
-
-ISR(TIMER0_COMPA_vect)
-{
-    if (buzzer_state)
-    {
-        TCCR2A &= ~(1 << COM2B1); // PWM uit
-        buzzer_state = false;
-    }
-    else
-    {
-        TCCR2A |= (1 << COM2B1); // PWM aan
-        buzzer_state = true;
-    }
-}
+static uint16_t currentFreq = 0;
+static uint8_t currentVolume = 0;
 
 void Buzzer_Init(void)
 {
-    DDRD |= (1 << BUZZER_PIN);
+    DDRD |= (1 << PD3); // OC2B output
 
-    // Timer2 -> Fast PWM (volume)
-    TCCR2A = (1 << WGM21) | (1 << WGM20) | (1 << COM2B1);
-    TCCR2B = (1 << CS22) | (1 << CS21); // prescaler 64
-    OCR2B = 128;
-
-    // Timer0 -> CTC (toon)
-    TCCR0A = (1 << WGM01);
-    TCCR0B = (1 << CS02);
-    TIMSK0 = (1 << OCIE0A);
-
-    OCR0A = 100; // standaardwaarde
+    // Timer2 instellen op CTC-mode (OCR2A als TOP)
+    // COM2B0 = toggle OC2B on match
+    // WGM21 = 1 (CTC), WGM22 = 1 (OCR2A top)
+    TCCR2A = (1 << COM2B0) | (1 << WGM21);
+    TCCR2B = (1 << WGM22) | (1 << CS22); // prescaler 64
 }
 
-void Buzzer_SetFrequency(uint16_t frequency)
+void Buzzer_SetFrequency(uint16_t freq)
 {
-    uint32_t half_ticks = TIMER0_BASE_FREQ / frequency;
+    if (freq < 20)
+        freq = 20;
+    if (freq > 4000)
+        freq = 4000;
 
-    if (half_ticks < 2)
-    {
-        half_ticks = 2;
-    }
+    // f = F_CPU / (2 * prescaler * (1 + OCR2A))
+    // => OCR2A = (F_CPU / (2 * prescaler * f)) - 1
+    uint32_t top = (F_CPU / (2UL * 64UL * freq)) - 1;
+    if (top > 255)
+        top = 255;
 
-    if (half_ticks > 255)
-    {
-        half_ticks = 255;
-    }
+    OCR2A = (uint8_t)top;
+    currentFreq = freq;
+}
 
-    uint8_t ocr_value = (uint8_t)(half_ticks - 1);
+void Buzzer_Update(uint16_t targetFreq)
+{
+    // vloeiend glijden naar nieuwe toonhoogte
+    if (targetFreq > currentFreq)
+        currentFreq += (targetFreq - currentFreq) / 3;
+    else
+        currentFreq -= (currentFreq - targetFreq) / 3;
 
-    cli();
-    OCR0A = ocr_value;
-    sei();
+    Buzzer_SetFrequency(currentFreq);
+}
+
+void Buzzer_SetVolume(uint8_t vol)
+{
+    currentVolume = vol;
+    // Softwarematig: geen echte amplitudecontrole
+}
+
+uint8_t Buzzer_GetVolume(void)
+{
+    return currentVolume;
 }
