@@ -1,11 +1,3 @@
-/*
- * main.c - Theremin Project (bare metal)
- * ---------------------------------------
- * Lineaire pitch volgens technisch ontwerp:
- *   f = FREQ_MAX - ((distance * (FREQ_MAX - FREQ_MIN)) / MAX_DIST_CM)
- * Volume-simulatie via potmeter: toonhoogte wordt iets mee geschaald.
- */
-
 #include <avr/io.h>
 #include <avr/interrupt.h>
 #include <util/delay.h>
@@ -30,20 +22,6 @@
 #define FILTER_MAX 15U
 #define BTN_DOWN PD4
 #define BTN_UP PD5
-
-/* ---------- Helper functies ---------- */
-static void usart_send_str(const char *s)
-{
-    while (*s)
-        USART_Transmit((uint8_t)*s++);
-}
-static void usart_send_uint(uint16_t v)
-{
-    char buf[6];
-    int n = snprintf(buf, sizeof(buf), "%u", (unsigned)v);
-    for (int i = 0; i < n; ++i)
-        USART_Transmit((uint8_t)buf[i]);
-}
 
 /* ---------- Buttons ---------- */
 static void Buttons_Init(void)
@@ -95,7 +73,6 @@ int main(void)
     HD44780_PCF8574_DisplayClear(LCD_ADDR);
     HD44780_PCF8574_PositionXY(LCD_ADDR, 0, 0);
     HD44780_PCF8574_DrawString(LCD_ADDR, "Theremin Ready");
-
     Buttons_Init();
     sei();
 
@@ -117,7 +94,6 @@ int main(void)
             if (filtered > MAX_DIST_CM)
                 filtered = MAX_DIST_CM;
 
-            /* Frequentie volgens technisch ontwerp (lineair) */
             uint32_t span = (uint32_t)FREQ_MAX - (uint32_t)FREQ_MIN;
             uint16_t freq = (uint16_t)((uint32_t)FREQ_MAX -
                                        ((uint32_t)filtered * span / (uint32_t)MAX_DIST_CM));
@@ -126,10 +102,6 @@ int main(void)
             uint8_t volume = ADC_GetValue();
             Buzzer_SetVolume(volume);
 
-            /* 🎵 Software volume-simulatie:
-             * schaal frequentie licht mee met potmeter
-             * (0.5x tot 1.0x toonhoogte)
-             */
             float scale = 0.5f + (volume / 510.0f); // 0..255 -> 0.5..1.0
             uint16_t effectiveFreq = (uint16_t)(freq * scale);
             if (effectiveFreq < FREQ_MIN)
@@ -151,17 +123,6 @@ int main(void)
 
             /* 7-seg: filtergrootte */
             SevenSeg_DisplayHex(Filter_GetSize());
-
-            /* Debug */
-            usart_send_str("Dist=");
-            usart_send_uint(filtered);
-            usart_send_str("cm  Freq=");
-            usart_send_uint(effectiveFreq);
-            usart_send_str("Hz  Vol=");
-            usart_send_uint(volume);
-            usart_send_str("  Fil=");
-            usart_send_uint(Filter_GetSize());
-            usart_send_str("\r\n");
 
             Buttons_Handle();
         }

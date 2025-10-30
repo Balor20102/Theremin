@@ -1,5 +1,7 @@
 #include "adc.h"
+#ifdef __AVR__
 #include <avr/io.h>
+#endif
 
 void ADC_Init(void)
 {

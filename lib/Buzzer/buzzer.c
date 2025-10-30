@@ -1,10 +1,8 @@
-/*
- * buzzer.c - eenvoudige en werkende versie
- * Timer2 in CTC mode -> toggle OC2B (D3)
- * Toonhoogte instelbaar via OCR2A
- */
 
+
+#ifdef __AVR__
 #include <avr/io.h>
+#endif
 #include "buzzer.h"
 
 #ifndef F_CPU
